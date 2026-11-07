@@ -2,7 +2,7 @@
 // @name         X Media Download
 // @description  Adds a hover download button to images and videos on X/Twitter. Full-size images, highest-bitrate videos. Media-download part of "X Reading Position & Media Download" by Copiis.
 // @namespace    https://github.com/zex0s/x-media-download
-// @version      1.1.0
+// @version      1.2.0
 // @author       zex0s (original: Copiis)
 // @license      MIT
 // @icon         https://x.com/favicon.ico
@@ -24,41 +24,51 @@
 (function () {
     'use strict';
 
-    const MESSAGES = {
-        noMedia: '❌ No media found for this post.',
-        failed: '❌ Media download failed.',
-        inProgress: 'Downloading media…'
-    };
+    const RING_C = 2 * Math.PI * 10; // donut circumference, r=10 in a 24x24 viewBox
 
-    function showPopup(key, duration = 5000, params = {}) {
-        if (!document.body) return;
-        let message = MESSAGES[key] || key;
-        for (const p of Object.keys(params)) message = message.replace(`{${p}}`, params[p]);
-        const popup = document.createElement('div');
-        Object.assign(popup.style, {
-            position: 'fixed',
-            top: '20px',
-            left: '50%',
-            transform: 'translateX(-50%)',
-            backgroundColor: 'rgba(0, 0, 0, 0.9)',
-            color: '#ffffff',
-            padding: '10px 20px',
-            borderRadius: '8px',
-            fontSize: '14px',
-            fontFamily: 'TwitterChirp, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
-            boxShadow: '0 0 10px rgba(29, 155, 240, 0.8)',
-            zIndex: '10000',
-            maxWidth: '500px',
-            whiteSpace: 'pre-wrap',
-            transition: 'opacity 1s ease',
-            opacity: '1'
-        });
-        popup.textContent = message;
-        document.body.appendChild(popup);
-        setTimeout(() => {
-            popup.style.opacity = '0';
-            setTimeout(() => popup.remove(), 1200);
-        }, duration);
+    // Donut progress ring. set(fraction) fills it; set(null) spins (size unknown yet).
+    function makeDonut(className) {
+        const el = document.createElement('div');
+        el.className = `xts-donut ${className} xts-donut-spin`;
+        el.innerHTML = '<svg viewBox="0 0 24 24"><circle class="xts-donut-track" cx="12" cy="12" r="10"></circle>'
+            + `<circle class="xts-donut-fill" cx="12" cy="12" r="10" stroke-dasharray="${RING_C}" stroke-dashoffset="${RING_C * 0.75}"></circle></svg>`;
+        const fill = el.querySelector('.xts-donut-fill');
+        return {
+            el,
+            set(fraction) {
+                el.classList.toggle('xts-donut-spin', fraction == null);
+                const f = fraction == null ? 0.25 : Math.min(1, Math.max(0, fraction));
+                fill.setAttribute('stroke-dashoffset', String(RING_C * (1 - f)));
+            }
+        };
+    }
+
+    // X-style toast at the bottom. Returns { set(text, fraction), close() }.
+    function showToast(text, { duration = 0, progress = false } = {}) {
+        const el = document.createElement('div');
+        el.className = 'xts-toast';
+        const donut = progress ? makeDonut('xts-donut-toast') : null;
+        if (donut) el.appendChild(donut.el);
+        const label = document.createElement('span');
+        label.textContent = text;
+        el.appendChild(label);
+        document.body.appendChild(el);
+        const close = () => {
+            el.classList.add('xts-toast-out');
+            setTimeout(() => el.remove(), 250);
+        };
+        if (duration) setTimeout(close, duration);
+        return {
+            set(newText, fraction) {
+                label.textContent = newText;
+                if (donut) donut.set(fraction);
+            },
+            close
+        };
+    }
+
+    function formatMB(bytes) {
+        return (bytes / 1048576).toFixed(bytes < 10485760 ? 1 : 0);
     }
 
     const MEDIA_DOWNLOAD_STYLE_ID = 'xts-media-download-style';
@@ -108,18 +118,59 @@
                 stroke-linecap: round;
                 stroke-linejoin: round;
             }
-            article:hover .xts-media-download-btn,
-            article[role="article"]:hover .xts-media-download-btn,
-            li[role="listitem"]:hover .xts-media-download-btn,
-            .xts-media-download-host:hover .xts-media-download-btn,
-            a[href*="/photo/"]:hover .xts-media-download-btn,
-            a[href*="/video/"]:hover .xts-media-download-btn,
-            [data-testid="videoComponent"]:hover .xts-media-download-btn,
+            /* Only while the mouse is moving over the media itself (hidden again after ~2s idle). */
+            .xts-media-download-host.xts-active .xts-media-download-btn,
             .xts-media-download-btn:hover,
             .xts-media-download-btn.xts-media-downloading {
                 opacity: 1;
                 pointer-events: auto;
             }
+            .xts-donut svg { display: block; width: 100%; height: 100%; transform: rotate(-90deg); }
+            .xts-donut circle { fill: none; stroke-width: 3; stroke-linecap: round; }
+            .xts-donut .xts-donut-fill { transition: stroke-dashoffset 0.2s linear; }
+            .xts-donut.xts-donut-spin svg { animation: xts-spin 0.8s linear infinite; }
+            @keyframes xts-spin { from { transform: rotate(-90deg); } to { transform: rotate(270deg); } }
+            .xts-donut-media {
+                position: absolute;
+                top: 8px;
+                right: 8px;
+                width: 34px;
+                height: 34px;
+                padding: 5px;
+                box-sizing: border-box;
+                border-radius: 50%;
+                background: rgba(15, 20, 25, 0.82);
+                backdrop-filter: blur(4px);
+                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+                z-index: 100;
+                pointer-events: none;
+            }
+            .xts-donut-media .xts-donut-track { stroke: rgba(255, 255, 255, 0.25); }
+            .xts-donut-media .xts-donut-fill { stroke: rgb(29, 155, 240); }
+            .xts-donut-toast { width: 18px; height: 18px; flex: none; }
+            .xts-donut-toast .xts-donut-track { stroke: rgba(255, 255, 255, 0.35); }
+            .xts-donut-toast .xts-donut-fill { stroke: #fff; }
+            .xts-toast {
+                position: fixed;
+                bottom: 32px;
+                left: 50%;
+                transform: translateX(-50%);
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                padding: 12px 16px;
+                border-radius: 4px;
+                background: rgb(29, 155, 240);
+                color: #fff;
+                font: 400 15px/20px TwitterChirp, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+                font-variant-numeric: tabular-nums;
+                box-shadow: rgba(101, 119, 134, 0.2) 0 0 15px, rgba(101, 119, 134, 0.15) 0 0 3px 1px;
+                z-index: 10000;
+                white-space: nowrap;
+                animation: xts-toast-in 0.2s ease;
+            }
+            .xts-toast.xts-toast-out { opacity: 0; transition: opacity 0.25s ease; }
+            @keyframes xts-toast-in { from { opacity: 0; transform: translate(-50%, 8px); } }
             .xts-media-download-btn:hover {
                 background: rgba(29, 155, 240, 0.85);
                 transform: scale(1.06);
@@ -295,12 +346,28 @@
         return `${samplePrefix}${safeAuthor}_${datePart}_${safeTweet}_${safeName}.${extension}`;
     }
 
-    async function fetchMediaBlob(url) {
+    async function readWithProgress(response, onProgress) {
+        const total = Number(response.headers.get('content-length')) || 0;
+        if (!onProgress || !response.body) return response.blob();
+        const reader = response.body.getReader();
+        const chunks = [];
+        let loaded = 0;
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            chunks.push(value);
+            loaded += value.length;
+            onProgress(loaded, total);
+        }
+        return new Blob(chunks, { type: response.headers.get('content-type') || '' });
+    }
+
+    async function fetchMediaBlob(url, onProgress) {
         if (!isAllowedMediaUrl(url)) throw new Error('Media URL not allowed');
         const response = await fetch(url, { credentials: 'omit' });
         if (!isAllowedMediaUrl(response.url)) throw new Error('Media URL not allowed');
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const blob = await response.blob();
+        const blob = await readWithProgress(response, onProgress);
         if (!blob.size) throw new Error('Empty blob');
         const contentType = response.headers.get('content-type') || blob.type || '';
         const pathname = new URL(response.url).pathname;
@@ -323,12 +390,12 @@
         }, 30000);
     }
 
-    async function downloadImageFromUrl(url, context) {
+    async function downloadImageFromUrl(url, context, onProgress) {
         const candidates = getImageDownloadUrlCandidates(url);
         let lastError = null;
         for (let i = 0; i < candidates.length; i++) {
             try {
-                const result = await fetchMediaBlob(candidates[i]);
+                const result = await fetchMediaBlob(candidates[i], onProgress);
                 const filename = buildMediaFilename({
                     author: context.author,
                     tweetId: context.tweetId,
@@ -523,7 +590,7 @@
         }
     }
 
-    async function downloadVideoForButton(posterUrl, context) {
+    async function downloadVideoForButton(posterUrl, context, onProgress) {
         const medias = await fetchTweetMedias(context.tweetId);
         const posterBase = stripUrlSearchParams(posterUrl || '');
         let mediaEntry = medias.find((m) => {
@@ -533,7 +600,7 @@
         if (!mediaEntry) mediaEntry = medias.find((m) => m.type === 'video');
         if (!mediaEntry?.download_url) throw new Error('No video URL');
 
-        const result = await fetchMediaBlob(mediaEntry.download_url);
+        const result = await fetchMediaBlob(mediaEntry.download_url, onProgress);
         const filename = buildMediaFilename({
             author: mediaEntry.screen_name || context.author,
             tweetId: mediaEntry.tweet_id || context.tweetId,
@@ -554,24 +621,52 @@
 
         const context = getTweetContextFromMediaElement(btn);
         if (!context?.tweetId) {
-            showPopup('noMedia', 4000);
+            showToast('No media found for this post.', { duration: 4000 });
             return;
         }
 
+        const isVideo = btn.dataset.isVideo === '1';
+        const kind = isVideo ? 'video' : 'image';
         btn.classList.add('xts-media-downloading');
-        showPopup('inProgress', 2500);
+        const donut = makeDonut('xts-donut-media');
+        btn.parentElement.appendChild(donut.el);
+        const toast = showToast(isVideo ? 'Finding video…' : 'Downloading image…', { progress: true });
+
+        const onProgress = (loaded, total) => {
+            const fraction = total ? loaded / total : null;
+            donut.set(fraction);
+            toast.set(total
+                ? `Downloading ${kind}… ${Math.floor(fraction * 100)}% · ${formatMB(loaded)} / ${formatMB(total)} MB`
+                : `Downloading ${kind}… ${formatMB(loaded)} MB`, fraction);
+        };
 
         try {
-            const filename = btn.dataset.isVideo === '1'
-                ? await downloadVideoForButton(btn.dataset.posterUrl || '', context)
-                : await downloadImageFromUrl(btn.dataset.mediaUrl || '', context);
-            btn.classList.remove('xts-media-downloading');
+            const filename = isVideo
+                ? await downloadVideoForButton(btn.dataset.posterUrl || '', context, onProgress)
+                : await downloadImageFromUrl(btn.dataset.mediaUrl || '', context, onProgress);
+            toast.close();
             console.log('[X Media Download] saved', filename);
         } catch (err) {
-            btn.classList.remove('xts-media-downloading');
+            toast.close();
             console.log('[X Media Download] failed:', err);
-            showPopup('failed', 5000);
+            showToast('Media download failed.', { duration: 5000 });
+        } finally {
+            donut.el.remove();
+            btn.classList.remove('xts-media-downloading');
         }
+    }
+
+    // Show the button only while the mouse is moving over the media; hide after 2s idle.
+    let activeHost = null;
+    let idleTimer = null;
+    function onMouseMove(event) {
+        const host = event.target.closest?.('.xts-media-download-host') || null;
+        if (activeHost && activeHost !== host) activeHost.classList.remove('xts-active');
+        activeHost = host;
+        clearTimeout(idleTimer);
+        if (!host) return;
+        host.classList.add('xts-active');
+        idleTimer = setTimeout(() => host.classList.remove('xts-active'), 2000);
     }
 
     function attachMediaDownloadButton(host, btn, selector) {
@@ -619,6 +714,7 @@
 
     function init() {
         injectMediaDownloadStyles();
+        document.addEventListener('mousemove', onMouseMove, { passive: true });
 
         let debounceTimer = null;
         scheduleScan = () => {
