@@ -2,7 +2,7 @@
 // @name         X Media Download
 // @description  Adds a hover download button to images and videos on X/Twitter. Full-size images, highest-bitrate videos. Media-download part of "X Reading Position & Media Download" by Copiis.
 // @namespace    https://github.com/zex0s/x-media-download
-// @version      1.0.0
+// @version      1.0.1
 // @author       zex0s (original: Copiis)
 // @license      MIT
 // @icon         https://x.com/favicon.ico
@@ -44,6 +44,7 @@
             padding: '10px 20px',
             borderRadius: '8px',
             fontSize: '14px',
+            fontFamily: 'TwitterChirp, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
             boxShadow: '0 0 10px rgba(29, 155, 240, 0.8)',
             zIndex: '10000',
             maxWidth: '500px',
