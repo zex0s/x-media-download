@@ -2,7 +2,7 @@
 // @name         X Media Download
 // @description  Adds a hover download button to images and videos on X/Twitter. Full-size images, highest-bitrate videos. Media-download part of "X Reading Position & Media Download" by Copiis.
 // @namespace    https://github.com/zex0s/x-media-download
-// @version      1.0.1
+// @version      1.1.0
 // @author       zex0s (original: Copiis)
 // @license      MIT
 // @icon         https://x.com/favicon.ico
@@ -11,7 +11,9 @@
 // @connect      pbs.twimg.com
 // @connect      video.twimg.com
 // @connect      ton.twimg.com
-// @grant        none
+// @connect      cdn.syndication.twimg.com
+// @grant        GM_xmlhttpRequest
+// @grant        GM.xmlHttpRequest
 // @downloadURL  https://raw.githubusercontent.com/zex0s/x-media-download/main/x-media-download.user.js
 // @updateURL    https://raw.githubusercontent.com/zex0s/x-media-download/main/x-media-download.user.js
 // ==/UserScript==
@@ -25,7 +27,6 @@
     const MESSAGES = {
         noMedia: '❌ No media found for this post.',
         failed: '❌ Media download failed.',
-        success: '✅ Downloaded: {fileName}',
         inProgress: 'Downloading media…'
     };
 
@@ -127,9 +128,6 @@
                 cursor: wait;
                 background: rgba(29, 155, 240, 0.55);
             }
-            .xts-media-download-btn.xts-media-downloaded {
-                background: rgba(0, 186, 124, 0.75);
-            }
         `.trim();
         document.head.appendChild(style);
     }
@@ -141,9 +139,7 @@
         btn.dataset.isVideo = isVideo ? '1' : '0';
         btn.title = isVideo ? 'Download video' : 'Download image';
         btn.setAttribute('aria-label', btn.title);
-        btn.innerHTML = isVideo
-            ? '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"></path><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"></path></svg>'
-            : '<svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h7"></path><path d="M17 3l4 4-9 9H8v-4z"></path></svg>';
+        btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 4v11"></path><path d="M7 10l5 5 5-5"></path><path d="M5 20h14"></path></svg>';
         return btn;
     }
 
@@ -458,18 +454,64 @@
         if (guestToken) headers['x-guest-token'] = guestToken;
         else headers['x-twitter-auth-type'] = 'OAuth2Session';
 
-        const response = await fetch(url.toString(), { headers });
-        const json = await response.json();
-        const tweetResult = unwrapTweetResult(json?.data?.tweetResult?.result);
-        let medias = parseTweetLegacyMedias(tweetResult);
-
-        const quoted = tweetResult?.quoted_status_result?.result;
-        if (quoted) medias = medias.concat(parseTweetLegacyMedias(unwrapTweetResult(quoted)));
+        let medias = [];
+        try {
+            const response = await fetch(url.toString(), { headers });
+            if (!response.ok) throw new Error(`GraphQL HTTP ${response.status}`);
+            const json = await response.json();
+            const tweetResult = unwrapTweetResult(json?.data?.tweetResult?.result);
+            medias = parseTweetLegacyMedias(tweetResult);
+            const quoted = tweetResult?.quoted_status_result?.result;
+            if (quoted) medias = medias.concat(parseTweetLegacyMedias(unwrapTweetResult(quoted)));
+        } catch (err) {
+            console.log('[X Media Download] GraphQL failed, trying embed API:', err);
+        }
+        // X rotates the GraphQL query id; the public embed API is the fallback.
+        if (!medias.length) medias = await fetchSyndicationMedias(tweetId);
+        if (!medias.length) return [];
 
         mediaApiCache.set(tweetId, medias);
         if (mediaApiCache.size > 24) mediaApiCache.delete(mediaApiCache.keys().next().value);
 
         return medias;
+    }
+
+    // cdn.syndication.twimg.com only allows CORS from platform.twitter.com, so go through the userscript manager.
+    function gmGetJson(url) {
+        const xhr = typeof GM_xmlhttpRequest === 'function' ? GM_xmlhttpRequest
+            : (typeof GM !== 'undefined' && GM.xmlHttpRequest) || null;
+        if (!xhr) return Promise.reject(new Error('GM_xmlhttpRequest unavailable'));
+        return new Promise((resolve, reject) => {
+            xhr({
+                method: 'GET',
+                url,
+                onload: (res) => {
+                    if (res.status !== 200) return reject(new Error(`Embed API HTTP ${res.status}`));
+                    try { resolve(JSON.parse(res.responseText)); } catch (e) { reject(e); }
+                },
+                onerror: () => reject(new Error('Embed API network error'))
+            });
+        });
+    }
+
+    function syndicationToMedias(tweet) {
+        if (!tweet?.mediaDetails) return [];
+        return parseTweetLegacyMedias({
+            rest_id: tweet.id_str,
+            legacy: { id_str: tweet.id_str, extended_entities: { media: tweet.mediaDetails } },
+            core: { user_results: { result: { legacy: { screen_name: tweet.user?.screen_name } } } }
+        });
+    }
+
+    async function fetchSyndicationMedias(tweetId) {
+        try {
+            const token = ((Number(tweetId) / 1e15) * Math.PI).toString(36).replace(/(0+|\.)/g, '');
+            const json = await gmGetJson(`https://cdn.syndication.twimg.com/tweet-result?id=${tweetId}&token=${token}`);
+            return syndicationToMedias(json).concat(syndicationToMedias(json.quoted_tweet));
+        } catch (err) {
+            console.log('[X Media Download] embed API failed:', err);
+            return [];
+        }
     }
 
     function stripUrlSearchParams(url) {
@@ -524,8 +566,7 @@
                 ? await downloadVideoForButton(btn.dataset.posterUrl || '', context)
                 : await downloadImageFromUrl(btn.dataset.mediaUrl || '', context);
             btn.classList.remove('xts-media-downloading');
-            btn.classList.add('xts-media-downloaded');
-            showPopup('success', 5000, { fileName: filename });
+            console.log('[X Media Download] saved', filename);
         } catch (err) {
             btn.classList.remove('xts-media-downloading');
             console.log('[X Media Download] failed:', err);
